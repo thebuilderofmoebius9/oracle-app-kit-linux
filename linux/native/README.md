@@ -1,87 +1,81 @@
 # ARRA Oracles — native Linux desktop
 
-GTK 3 + VTE desktop client for local tmux sessions. This is the terminal milestone
-of the Linux port, not a port of every upstream feature.
+GTK 3 + VTE desktop client for local tmux and Herdr terminals, with a read-only
+atom-native service/queue monitor. Both terminal providers appear in one sidebar.
+This is the terminal milestone of the Linux port, not every upstream feature.
 
 ## Run
 
-Requirements: Linux 5.3+ graphical desktop, Python 3.10+, PyGObject, GTK 3, VTE 2.91,
-and tmux 3.2+. The Debian package declares the corresponding system dependencies.
-The app does not install packages, start a network listener, or enable a service.
+Requirements: Linux 5.3+ graphical desktop, Python 3.10+, PyGObject, GTK 3,
+VTE 2.91 and tmux 3.2+. Install Herdr separately to use its terminals; the installed
+version must support `terminal attach`. A missing provider is reported while
+working providers remain available. No network listener or autostart is added.
 
 ```sh
 ./linux/native/run
+./linux/native/run --herdr-session default --herdr-session development
+./linux/native/run --socket isolated --tmux-only
 ```
 
-Choose a pane in the sidebar to connect. Type directly in the terminal. Close
-the app to detach; the shell remains owned by the tmux server. Reopen and connect
-to the same session. Use **New session** to create a workspace. Existing Herdr
-sessions are not migrated or terminated.
+By default the app discovers running local Herdr sessions on refresh and reads
+the normal tmux socket. Use repeatable `--herdr-session` to restrict Herdr discovery.
+Choose a pane to connect, type directly, resize, or press Reconnect. Closing the
+app detaches the client. The session's existing server owns the shell process.
+New session opens a selector for a tmux session or a workspace in a running Herdr
+session; it does not start a new Herdr server. Existing sessions are not migrated.
 
-This executable runs on Linux. A Windows browser cannot run a Linux desktop app;
-remote desktop or a separate remote/web client would be needed for that use case.
+Herdr direct attach does not force takeover of another controller. If Herdr
+rejects attachment, its error appears in the terminal and the app disconnects.
+Herdr reserves Ctrl+B Q to detach and Ctrl+B Ctrl+B for a literal Ctrl+B.
+Selecting tmux panes changes the shared active pane/window for other tmux clients.
 
-## Architecture
+For persistence, keep multiplexer servers managed independently of the app's
+service/cgroup. Closing the window preserves sessions; stopping a service that
+also owns the server may kill that server. Reboot recovery is not implemented.
+Scrollback is bounded, and Oracle semantic memory remains in ARRA/Muninn.
 
-`app.py` draws the native UI and embeds a real terminal. `tmux_backend.py` owns
-list/create/focus/send/read actions and exposes them as a JSON CLI for agents.
-VTE runs the backend's attach command through a PTY, allowing tmux to handle
-terminal input, rendering, resizing, and detach. No duplicate UI-only shell logic.
-Session state lives in tmux and can be inspected from the CLI. The app saves only
-a selection hint locally; it does not treat that hint as proof a session exists.
+This executable runs on Linux; it is not a Windows executable or browser app.
+This release discovers local sessions, not remote machines over SSH.
 
-The default socket is the user's normal tmux server. Pass `--socket NAME` to use
-a separate server. Tests use unique sockets and never terminate the default server.
-Selecting a pane changes tmux's shared active pane/window, so other clients of
-that session can observe the focus change.
+## Atom-native monitor
 
-## Persistence is not long-term memory
+Press **Atom status** for a timestamped read-only snapshot of systemd service
+state, queue totals and recent job IDs/status/attempts. Press Refresh to read again.
+The default database is `~/atom-native/data/atom-native.sqlite`; override with
+`--atom-db FILE`. Missing service/database/schema is displayed as unavailable.
+The monitor reads SQLite with `mode=ro` and `query_only`; it never sends tasks,
+changes the queue, restarts the bridge, or displays prompts and credentials.
+Service active state does not by itself prove Discord delivery health.
 
-- Detaching or closing this app leaves tmux sessions and their processes running.
-- Scrollback is bounded by tmux's history limit; it is not an unlimited transcript.
-- Rebooting or terminating the tmux server loses live processes and in-memory
-  scrollback. This release does not implement reboot restoration.
-- Oracle semantic memory remains a separate ARRA/Muninn concern. Herdr also has
-  persistent sessions; using tmux is a backend choice, not proof Herdr lacks memory.
+## Shared capabilities for agents
+
+The GUI uses the same adapters as the JSON CLI. `list` returns namespaced pane IDs
+and provider errors. Use IDs returned by that call rather than guessing them.
+
+```sh
+python3 linux/native/combined_backend.py list
+python3 linux/native/combined_backend.py read 'tmux:%0' --lines 100
+python3 linux/native/combined_backend.py send 'tmux:%0' 'echo hello' --enter
+python3 linux/native/combined_backend.py attach-pane-argv 'herdr:default:w1:p1'
+python3 linux/native/atom_monitor.py --recent-limit 8
+```
+
+Run `combined_backend.py --help` for provider filters and creation arguments.
+Sending with `--enter` executes input in the target terminal. No additional
+privilege is granted: both people and agents use the same OS-user access.
+The original `tmux_backend.py` CLI remains available for existing callers.
 
 ## Package and verify
 
 ```sh
 python3 linux/native/build_package.py --output /tmp/oracle-linux-dist
 python3 -m unittest discover -s linux/native -p 'test_*.py' -v
-xvfb-run -a python3 linux/native/check_gui.py
+xvfb-run -a /usr/bin/python3 linux/native/check_gui.py
+xvfb-run -a /usr/bin/python3 linux/native/check_dual_gui.py
 ```
 
-The `.deb` includes only the new native client, its launcher, icon and README.
-It has no post-install scripts and does not change tmux configuration.
-
-## Agent CLI
-
-Use the same OS user and socket as the desktop. Commands return JSON; failures
-return a nonzero status with a JSON error on stderr. Sending text with `--enter`
-can execute commands in the selected shell, so inspect the returned pane IDs.
-
-```sh
-python3 linux/native/tmux_backend.py list
-python3 linux/native/tmux_backend.py create workspace
-python3 linux/native/tmux_backend.py read '%0' --lines 100
-python3 linux/native/tmux_backend.py focus '%0'
-python3 linux/native/tmux_backend.py send '%0' 'echo hello' --enter
-python3 linux/native/tmux_backend.py attach-argv '$0'
-```
-
-Replace `%0` and `$0` with IDs returned by `list`. For a separate server, place
-`--socket NAME` before the subcommand. No HTTP endpoint or additional privilege
-is required by either the GUI or the CLI.
-
-## Scope
-
-This milestone does not implement fleet discovery, remote SSH connection UI,
-agent task dispatch, Memory/Map tabs, or migration of Herdr sessions. The earlier
-local web Hub can continue separately. Test evidence must distinguish GUI/PTY
-verification from a health endpoint or a successful backend command.
-
-Upstream protocol reference:
-https://github.com/Soul-Brews-Studio/oracle-app-kit/blob/3fcd91bb4dfca86625aa2880e7661f35df6977ce/OracleKit/Sources/OracleKit/HerdrStream.swift
-
-tmux documentation: https://github.com/tmux/tmux/wiki/Getting-Started
+The package contains only the native client, adapters, launcher, icon and README.
+It has no post-install scripts and does not change multiplexer configuration.
+The tests create isolated fixtures and never terminate the user's default server.
+Memory/Map tabs, cross-machine discovery, task dispatch and session migration
+remain outside this release. Atom-native integration is monitoring only.

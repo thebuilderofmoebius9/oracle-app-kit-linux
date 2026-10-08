@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native GTK/VTE tmux client for ARRA Oracles on Linux."""
+"""Native GTK/VTE terminal client for ARRA Oracles on Linux."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ gi.require_version("Vte", "2.91")
 from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
 
 from tmux_backend import TmuxBackend
+from combined_backend import CompositeBackend
+from atom_monitor import AtomNativeMonitor, DEFAULT_DATABASE
 
 
 APP_ID = "arra-oracles-linux"
@@ -60,8 +62,10 @@ class OracleWindow(Gtk.Window):
         state_dir: Path,
         smoke_test: bool = False,
         screenshot: Path | None = None,
+        atom_database: Path = DEFAULT_DATABASE,
     ) -> None:
         super().__init__(title="ARRA Oracles · Linux")
+        self.atom_monitor = AtomNativeMonitor(atom_database)
         self.backend = backend
         self.state_dir = state_dir
         self.state_file = state_dir / "state.json"
@@ -123,6 +127,9 @@ class OracleWindow(Gtk.Window):
         create = Gtk.Button(label="New session")
         create.connect("clicked", self._show_create_dialog)
         top.pack_end(create, False, False, 0)
+        monitor = Gtk.Button(label="Atom status")
+        monitor.connect("clicked", self._show_atom_status)
+        top.pack_end(monitor, False, False, 0)
         root.pack_start(top, False, False, 0)
 
         paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
@@ -131,7 +138,7 @@ class OracleWindow(Gtk.Window):
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         sidebar.set_name("sidebar")
-        side_title = Gtk.Label(label="TMUX SESSIONS", xalign=0)
+        side_title = Gtk.Label(label="TERMINAL SESSIONS", xalign=0)
         side_title.set_name("sidebar-title")
         sidebar.pack_start(side_title, False, False, 0)
         self.listbox = Gtk.ListBox()
@@ -163,7 +170,7 @@ class OracleWindow(Gtk.Window):
 
         statusbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         statusbar.set_name("statusbar")
-        self.status = Gtk.Label(label="Discovering tmux sessions…", xalign=0)
+        self.status = Gtk.Label(label="Discovering terminal sessions…", xalign=0)
         self.status.set_name("status")
         statusbar.pack_start(self.status, True, True, 0)
         self.connection = Gtk.Label(label="● Offline", xalign=1)
@@ -240,7 +247,7 @@ class OracleWindow(Gtk.Window):
     def refresh(self) -> None:
         self.refresh_serial += 1
         serial = self.refresh_serial
-        self._set_status("Refreshing tmux sessions…")
+        self._set_status("Refreshing terminal sessions…")
         self._run_async(
             self.backend.list_panes,
             lambda panes: self._populate_panes(serial, panes),
@@ -302,6 +309,9 @@ class OracleWindow(Gtk.Window):
             self._set_status("Previous pane selected · press Connect to attach")
         else:
             self._set_status(f"{len(panes)} panes across {len({p['session_id'] for p in panes})} sessions")
+        errors = getattr(self.backend, "errors", {})
+        if errors:
+            self._set_status(f"{len(panes)} panes · unavailable: {errors}", error=True)
         if self.smoke_test:
             if panes:
                 row = self.rows[str(panes[0]["pane_id"])]
@@ -387,6 +397,8 @@ class OracleWindow(Gtk.Window):
         self._set_status(f"Connecting to {pane['session_name']} / pane {pane['pane_index']}…")
 
         def prepare() -> list[str]:
+            if hasattr(self.backend, "attach_pane_argv"):
+                return self.backend.attach_pane_argv(str(pane["pane_id"]))
             self.backend.focus(str(pane["pane_id"]))
             return self.backend.attach_argv(str(pane["session_id"]))
 
@@ -433,7 +445,7 @@ class OracleWindow(Gtk.Window):
             and self.child_pid is not None
         ):
             self.pending_connection = None
-            self._async_error("Reconnect failed", "tmux client did not detach")
+            self._async_error("Reconnect failed", "terminal client did not detach")
         return False
 
     def _spawn_pending(self) -> None:
@@ -447,17 +459,22 @@ class OracleWindow(Gtk.Window):
         env = [
             f"{key}={value}"
             for key, value in os.environ.items()
-            if key not in {"TMUX", "TMUX_PANE", "TERM"}
+            if key not in {"TMUX", "TMUX_PANE", "TERM", "HERDR_ENV", "HERDR_SOCKET_PATH",
+                           "HERDR_SESSION", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID",
+                           "HERDR_PANE_ID", "HERDR_TERMINAL_ID"}
         ]
         # Terminal.spawn_async owns child reaping; only disable parent env so a
         # GUI launched inside tmux does not attempt an illegal nested attach.
         flags = GLib.SpawnFlags(
             int(Vte.SPAWN_NO_PARENT_ENVV) | int(GLib.SpawnFlags.SEARCH_PATH_FROM_ENVP)
         )
+        cwd = Path(str(pane.get("cwd") or Path.home()))
+        if not cwd.is_dir():
+            cwd = Path.home()
         # Ubuntu's Vte-2.91 typelib exposes child_setup_data as the second None.
         self.terminal.spawn_async(
             Vte.PtyFlags.DEFAULT,
-            str(pane.get("cwd") or Path.home()),
+            str(cwd),
             argv,
             env,
             flags,
@@ -500,7 +517,7 @@ class OracleWindow(Gtk.Window):
             self.child_pidfd = os.pidfd_open(pid)
         except ProcessLookupError:
             self.child_pid = None
-            self._async_error("Attach failed", "tmux client exited before it could be tracked")
+            self._async_error("Attach failed", "terminal client exited before it could be tracked")
             return
         self.connected_pane = pane
         self.selected_pane = pane
@@ -539,7 +556,7 @@ class OracleWindow(Gtk.Window):
             return
         self.connected_pane = None
         self.connection.set_text("● Disconnected")
-        self._set_status("tmux client disconnected · refresh or reconnect")
+        self._set_status("terminal client disconnected · refresh or reconnect")
 
     def _poll_smoke_marker(self, marker: str) -> bool:
         if time.monotonic() > self.smoke_deadline:
@@ -600,31 +617,100 @@ class OracleWindow(Gtk.Window):
         self._detach_client()
         GLib.timeout_add(200, self._finish_close)
 
+    def _show_atom_status(self, _button: Gtk.Button) -> None:
+        dialog = Gtk.Dialog(title="Atom-native · read-only status", transient_for=self)
+        dialog.set_default_size(660, 440)
+        dialog.add_buttons("Refresh", Gtk.ResponseType.APPLY, "Close", Gtk.ResponseType.CLOSE)
+        view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True)
+        view.set_margin_start(12)
+        view.set_margin_end(12)
+        view.set_margin_top(12)
+        scroll = Gtk.ScrolledWindow()
+        scroll.add(view)
+        dialog.get_content_area().pack_start(scroll, True, True, 0)
+        alive = [True]
+        busy = [False]
+
+        def render(snapshot: dict[str, Any]) -> None:
+            busy[0] = False
+            if not alive[0]:
+                return
+            service = snapshot["service"]
+            database = snapshot["database"]
+            lines = ["ATOM-NATIVE · READ-ONLY", ""]
+            if service.get("available"):
+                lines.append(f"Service: {service['active_state']} / {service['sub_state']} ({service['unit_file_state']})")
+            else:
+                lines.append("Service: " + service.get("detail", "unavailable"))
+            lines.append("Snapshot: " + time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(snapshot["captured_at_ms"] / 1000)))
+            if database.get("available"):
+                queue = database["queue"]
+                lines.extend(["", "Queue totals: " + ", ".join(f"{key}={count}" for key, count in queue["counts"].items()), "", "Recent jobs:"])
+                for job in queue["recent"]:
+                    lines.append(f"  #{job['id']}  {job['status']}  attempts={job['attempts']}")
+            else:
+                lines.extend(["", "Queue: " + database.get("detail", "unavailable")])
+            lines.extend(["", "This view reads status only. It does not send tasks or restart services."])
+            view.get_buffer().set_text("\n".join(lines))
+
+        def failed(detail: str) -> None:
+            busy[0] = False
+            if alive[0]:
+                view.get_buffer().set_text("Status unavailable: " + detail)
+
+        def refresh() -> None:
+            if not busy[0]:
+                busy[0] = True
+                self._run_async(self.atom_monitor.snapshot, render, "Atom status", error_callback=failed)
+
+        def respond(_dialog: Gtk.Dialog, response: int) -> None:
+            if response == Gtk.ResponseType.APPLY:
+                refresh()
+            else:
+                alive[0] = False
+                dialog.destroy()
+
+        dialog.connect("response", respond)
+        dialog.connect("destroy", lambda _dialog: alive.__setitem__(0, False))
+        dialog.show_all()
+        refresh()
+
     def _show_create_dialog(self, _button: Gtk.Button) -> None:
-        dialog = Gtk.Dialog(title="New tmux session", transient_for=self, modal=True)
+        dialog = Gtk.Dialog(title="New terminal workspace", transient_for=self, modal=True)
         dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Create", Gtk.ResponseType.OK)
         content = dialog.get_content_area()
         content.set_spacing(8)
         content.set_border_width(14)
         name = Gtk.Entry(placeholder_text="Session name")
         cwd = Gtk.Entry(placeholder_text="Working directory (optional)")
-        content.pack_start(Gtk.Label(label="Create a persistent tmux session", xalign=0), False, False, 0)
+        providers = Gtk.ComboBoxText()
+        providers.append("tmux", "tmux · new session")
+        for backend in getattr(self.backend, "herdr", []):
+            providers.append("herdr/" + backend.session_name, "Herdr · " + backend.session_name + " · new workspace")
+        providers.set_active(0)
+        content.pack_start(providers, False, False, 0)
         content.pack_start(name, False, False, 0)
         content.pack_start(cwd, False, False, 0)
         dialog.show_all()
         response = dialog.run()
         session_name, working_directory = name.get_text().strip(), cwd.get_text().strip()
+        provider = providers.get_active_id() or "tmux"
         dialog.destroy()
         if response != Gtk.ResponseType.OK:
             return
         self._run_async(
-            lambda: self.backend.create_session(session_name, working_directory or None),
+            lambda: self.backend.create_session(session_name, working_directory or None, provider=provider)
+            if isinstance(self.backend, CompositeBackend)
+            else self.backend.create_session(session_name, working_directory or None),
             self._created_session,
             "Create failed",
         )
 
     def _created_session(self, pane: dict[str, Any]) -> bool:
         self.restored_pane_id = str(pane["pane_id"])
+        self.restored_session_id = pane["session_id"]
+        self.restored_session_name = pane["session_name"]
+        self.selected_pane = None
         self.refresh()
         return False
 
@@ -655,8 +741,11 @@ class OracleWindow(Gtk.Window):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="ARRA Oracles native Linux tmux client")
+    parser = argparse.ArgumentParser(description="ARRA Oracles native Linux terminal client")
     parser.add_argument("--socket", dest="socket_name", help="use an isolated named tmux socket")
+    parser.add_argument("--herdr-session", action="append", help="Herdr session to list (repeatable; default: discover running sessions)")
+    parser.add_argument("--atom-db", type=Path, default=DEFAULT_DATABASE, help="read-only atom-native database")
+    parser.add_argument("--tmux-only", action="store_true", help="disable Herdr discovery")
     parser.add_argument("--state-dir", type=Path, default=_default_state_dir())
     parser.add_argument("--smoke-test", action="store_true", help="exercise VTE attach, input, and reconnect")
     parser.add_argument("--screenshot", type=Path, help="save a PNG after a successful smoke test")
@@ -669,10 +758,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"ok": False, "detail": "--smoke-test requires --socket"}), file=sys.stderr)
         return 2
     window = OracleWindow(
-        TmuxBackend(args.socket_name),
+        TmuxBackend(args.socket_name) if args.smoke_test or args.tmux_only else CompositeBackend(args.socket_name, args.herdr_session),
         args.state_dir,
         smoke_test=args.smoke_test,
         screenshot=args.screenshot,
+        atom_database=args.atom_db,
     )
     window.present()
     Gtk.main()

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 
-VERSION = "0.1.0+20261008"
+VERSION = "0.2.0+20261008"
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
         root = Path(temp)
         app = root / "usr/share/oracle-linux"
         app.mkdir(parents=True)
-        for name in ("app.py", "tmux_backend.py", "run"):
+        for name in ("app.py", "tmux_backend.py", "herdr_backend.py", "combined_backend.py", "atom_monitor.py", "run"):
             shutil.copy2(source / name, app / name)
         (app / "run").chmod(0o755)
         bindir = root / "usr/bin"
@@ -44,7 +44,7 @@ def main():
             f"Package: oracle-linux\nVersion: {VERSION}\nArchitecture: all\n"
             "Maintainer: Oracle Linux contributors\nSection: x11\nPriority: optional\n"
             "Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-3.0, gir1.2-vte-2.91, tmux (>= 3.2)\n"
-            "Description: Native Oracle workspace backed by tmux\n"
+            "Description: Native Oracle workspace for tmux and Herdr\n"
             " GTK and VTE desktop client with session selection and a shared agent CLI.\n"
         )
         subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(root), str(target)], check=True)

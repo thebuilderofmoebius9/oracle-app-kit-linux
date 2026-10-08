@@ -1,7 +1,7 @@
 # Oracle App Kit — Linux desktop
 
 This fork adds a native Linux terminal workspace in [`linux/native`](linux/native/README.md).
-It uses GTK 3 and VTE to attach to tmux sessions. Human UI and agent CLI share the
+It uses GTK 3 and VTE to attach to tmux and Herdr terminals, plus read-only atom-native monitoring. Human UI and agent CLI share the
 same backend actions. The upstream Apple apps remain in the repository.
 
 ```sh

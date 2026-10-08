@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
 Name=ARRA Oracles — Linux
-Comment=Native terminal workspace for persistent tmux sessions
+Comment=Native terminal workspace for tmux, Herdr and Atom status
 Exec=oracle-linux
 Icon=oracle-linux
 Terminal=false
 Categories=System;TerminalEmulator;
-Keywords=Oracle;tmux;terminal;workspace;
+Keywords=Oracle;tmux;Herdr;terminal;workspace;
 StartupNotify=false

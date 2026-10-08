@@ -112,7 +112,9 @@ def run_check() -> dict[str, Any]:
 
         initial_grid = tmux_value(socket_name, first_id, "#{pane_width}x#{pane_height}")
         width, height = (int(value) for value in initial_grid.split("x"))
-        window.terminal.set_size(width + 9, height + 4)
+        # Resize the window as a person would; GTK may immediately override a
+        # terminal-only size request during its pending layout allocation.
+        window.resize(window.get_size().width + 100, window.get_size().height + 80)
         wait_for(
             lambda: tmux_value(socket_name, first_id, "#{pane_width}x#{pane_height}")
             != initial_grid,
