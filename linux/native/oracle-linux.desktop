@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ARRA Oracles — Linux
+Comment=Native terminal workspace for persistent tmux sessions
+Exec=oracle-linux
+Icon=oracle-linux
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=Oracle;tmux;terminal;workspace;
+StartupNotify=false
